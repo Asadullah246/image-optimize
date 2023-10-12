@@ -2,6 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import fetch from "node-fetch";
+import tinify from "tinify";
 
 dotenv.config();
 const port = process.env.PORT || 8080;
@@ -13,6 +14,7 @@ app.use(express.json());
 // Define your Shopify store credentials
 const shopifyApiUrl = `https://${process.env.STORE_URL}/admin/api/2023-10/graphql.json`; // Replace with your shop's URL
 const shopifyApiAccessToken = process.env.SHOPIF_API_PASS_WITH_TOKEN; // Replace with your API access token
+tinify.key = process.env.TINIFY_API_KEY;
 
 // Endpoint to update an image on Shopify
 app.get("/update-image", async (req, res) => {
@@ -63,8 +65,23 @@ app.get("/update-image", async (req, res) => {
   }
 });
 
-// Endpoint to fetch product images from Shopify
-app.get("/product-images", async (req, res) => {
+// Helper function to generate a unique number
+function generateUniqueNumber() {
+  const generatedNumbers = new Set();
+  
+  while (true) {
+    const uniqueNumber = Math.floor(1000000000 + Math.random() * 9000000000); // Generate a random 10-digit number
+    const uniqueNumberString = uniqueNumber.toString();
+
+    if (!generatedNumbers.has(uniqueNumberString)) {
+      generatedNumbers.add(uniqueNumberString);
+      return uniqueNumberString;
+    }
+  }
+}
+
+// Function to fetch product images from Shopify and compress them
+async function fetchAndCompressProductImages() {
   try {
     // Make a GraphQL request to Shopify to fetch all products and their images
     const response = await fetch(shopifyApiUrl, {
@@ -99,7 +116,6 @@ app.get("/product-images", async (req, res) => {
     }
 
     const data = await response.json();
-
     const responseData = data.data; // Assuming that the data is stored in a 'data' field
 
     if (responseData && responseData.files && responseData.files.edges) {
@@ -108,27 +124,47 @@ app.get("/product-images", async (req, res) => {
 
       // Loop through the mediaImages array to process each image
       for (const imageInfo of mediaImages) {
-        // Get the unique ID for this MediaImage (for changing image)
-        const MediaImageId = imageInfo.node.id;
-
-        // Check if the image source exists and extract it (this is the actual image source that needs optimization)
-        const MediaImageSrc = imageInfo.node?.image?.originalSrc;
-
-        // Log the MediaImageId and its source for debugging or further processing
-
-        // Now you can optimize the MediaImageSrc as needed
-        // After optimization, you can update the image source by calling the API again with MediaImageId
+        await processImage(imageInfo);
       }
     } else {
-      // Log an error message if the data structure is not as expected
       console.error("Data structure is not as expected.");
-    }    
-
-    res.json({ data });
+    }
   } catch (error) {
-    console.error("Error fetching product images from Shopify:", error);
-    res.status(500).json({ error: "Internal server error" });
+    console.error("Error fetching and compressing product images:", error);
+    // Handle the error and respond accordingly
   }
+}
+
+// Function to process and compress an individual image
+async function processImage(imageInfo) {
+  // Get the unique ID for this MediaImage (for changing image)
+  const mediaImageId = imageInfo.node.id;
+  const imageExtensions = [".jpg", ".jpeg", ".png", ".webp"];
+
+  // Check if the image source exists and extract it (this is the actual image source that needs optimization)
+  const mediaImageSrc = imageInfo.node?.image?.originalSrc;
+
+  // Log the MediaImageId and its source for debugging or further processing
+  // Now you can optimize the MediaImageSrc as needed
+  // After optimization, you can update the image source by calling the API again with MediaImageId
+  const imageExtension = imageExtensions.find(extension => mediaImageSrc?.includes(extension));
+  
+  if (imageExtension) {
+    try {
+      // Use the Tinify API to compress the image
+      const source = tinify.fromUrl(mediaImageSrc);
+      const imageName = generateUniqueNumber();
+      await source.toFile(`images/${imageName}${imageExtension}`); // Wait for the compression to finish
+    } catch (error) {
+      console.error("Error compressing image:", error);
+    }
+  }
+}
+
+// Endpoint to fetch and compress product images from Shopify
+app.get("/product-images", async (req, res) => {
+  await fetchAndCompressProductImages();
+  res.json({ data });
 });
 
 app.listen(port, () => {
